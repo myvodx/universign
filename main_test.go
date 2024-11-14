@@ -25,7 +25,8 @@ func TestVerifyWebhookSignature(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			err := VerifyWebhookSignature(tt.args.signature, tt.args.body)
 			if err != nil {
-				t.Errorf("VerifyWebhookSignature() error = %v, wantErr %v", err, nil)
+				t.Errorf("VerifyWebhookSignature() error = %v, signature: %v, body: %v", err, tt.args.signature, tt.args.body)
+
 			}
 		})
 	}

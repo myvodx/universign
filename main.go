@@ -41,15 +41,12 @@ func decodeJWSHeader(header string) (*JWSHeader, error) {
 //
 // It fetches the JWKS from the configured Universign base URL, iterates over the keys, and returns
 // the key matching the specified kid. If no matching key is found, it returns an error.
-//
-// @arg kid The key ID to look for in the JWKS.
-// @return jwk.Key The JWK corresponding to the provided kid, or an error if not found or if fetching fails.
 func getPublicKey(kid string) (jwk.Key, error) {
 	url := "https://api.universign.com/v1/webhooks/jwks.json"
 
 	set, err := jwk.Fetch(context.Background(), url)
 	if err != nil {
-		log.Printf("failed to parse JWK: %s", err)
+		log.Error().Err(err).Msg("failed to fetch JWK set")
 		return nil, err
 	}
 
@@ -59,56 +56,45 @@ func getPublicKey(kid string) (jwk.Key, error) {
 		key := pair.Value.(jwk.Key)
 
 		// Check if the key has the specified kid
-		if key.KeyID() != kid {
-			continue
+		if key.KeyID() == kid {
+			return key, nil
 		}
-
-		return key, nil
 	}
 
-	return nil, errors.New("key not found")
+	return nil, fmt.Errorf("no matching key found for kid: %s", kid)
 }
 
 // VerifyWebhookSignature verifies the signature of a webhook payload in JWS format
 // @see https://apps.universign.com/docs/developer_tools/webhooks/
 func VerifyWebhookSignature(jwsSignature string, payload string) error {
+	// Split the JWS signature into its components
 	jwsParts := strings.Split(jwsSignature, ".")
 	if len(jwsParts) != 3 {
-		log.Error().Msgf("invalid JWS signature: %v", jwsSignature)
-		return errors.New("invalid JWS signature")
+		log.Error().Msg("invalid JWS signature format")
+		return errors.New("invalid JWS signature format")
 	}
 
-	// 0. Base64-Decode the JWS
+	// Decode the JWS header to retrieve the kid
 	signHeader, err := decodeJWSHeader(jwsParts[0])
 	if err != nil {
-		log.Error().Err(err).Msgf("VerifyWebhookSignature decodeJWSHeader: %v", err)
+		log.Error().Err(err).Msg("failed to decode JWS header")
 		return err
 	}
 
-	// 1. Retrieve the key ID used by Universign to sign the webhook
-	// 2. Retrieve the public key matching this ID
+	// Retrieve the public key corresponding to the kid
 	publicKey, err := getPublicKey(signHeader.Kid)
 	if err != nil {
-		log.Error().Err(err).Msgf("VerifyWebhookSignature getPublicKey: %v", err)
+		log.Error().Err(err).Msgf("failed to retrieve public key for kid: %s", signHeader.Kid)
 		return err
 	}
-	// 3. Reconstruct the signed data: concatenating the base64URL-encoded header and payload
-	encodedPayload := base64.RawURLEncoding.EncodeToString([]byte(payload))
-	signedData := fmt.Sprintf("%s.%s", jwsParts[0], encodedPayload)
-	signedData += "." + jwsParts[2]
-	log.Debug().Msgf("encodedPayload: %v", encodedPayload)
 
-	// 4. Verify the obtained signature value with the public key
-	verified, err := jws.Verify([]byte(signedData), jwa.SignatureAlgorithm(signHeader.Alg), publicKey)
+	// Verify the signature using the public key
+	_, err = jws.Verify([]byte(jwsSignature), jwa.PS256, publicKey)
 	if err != nil {
-		log.Printf("failed to verify message: %s", err)
+		log.Error().Err(err).Msg("signature verification failed")
 		return err
 	}
 
-	log.Debug().Msgf("verified: %v", verified)
-	if (string(verified)) == signedData {
-		return nil
-	}
-
-	return errors.New("invalid signature")
+	log.Info().Msg("signature verified successfully")
+	return nil
 }
